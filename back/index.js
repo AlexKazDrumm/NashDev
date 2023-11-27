@@ -30,13 +30,11 @@ app.get('/', (request, response) => {
     response.json({ info: 'Node.js, Express, and Postgres API' })
 })
 
-app.post('/register', upload.fields([
-    { name: 'sertificate', maxCount: 1 },
-    { name: 'insurance_contract', maxCount: 1 },
-    { name: 'ward', maxCount: 1 }
-]), db.register);
-
+app.post('/register', db.register);
 app.post('/auth', db.auth);
+app.post('/createRequest', db.createRequest);
+app.get('/getRequestsByCreator', db.getRequestsByCreator);
+app.get('/getRequestsByStatus', db.getRequestsByStatus);
 
 
 let port = process.env.PORT || 3030;

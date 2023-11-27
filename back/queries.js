@@ -29,47 +29,37 @@ const register = async (request, response) => {
 
     try {
         await client.query('BEGIN');
-        const {
-            email, password
-        } = request.body;
-
+        const { email, password } = request.body;
 
         const emailExists = await isEmailExists(email);
         if (emailExists) {
             throw new Error('Email already exists.');
         }
 
-        if (password !== confirmPassword) {
-            throw new Error('Passwords do not match.');
-        }
-
         const hashedPassword = await hashPassword(password);
 
+        // Создание записи в nd_persons
         const personResult = await client.query(`
-            INSERT INTO nd_renters 
-            (email) 
-            VALUES ($1) RETURNING id`,
-            [email]);
+            INSERT INTO nd_persons 
+            (role_id) 
+            VALUES (1) RETURNING id`
+        );
 
         const personId = personResult.rows[0].id;
 
-        // Создание пользователя в smbt_users
+        // Создание пользователя в nd_users
         await client.query(`
             INSERT INTO nd_users 
-            (hashed_password, person_id) 
-            VALUES ($1, $2)`,
-            [hashedPassword, personId]);
+            (email, hashed_password, person_id) 
+            VALUES ($1, $2, $3)`,
+            [email, hashedPassword, personId]
+        );
 
         await client.query('COMMIT');
 
         const token = generateToken(personId);
 
-        const { rows } = await client.query(`
-            SELECT * FROM nd_renters WHERE id = $1
-        `, [personId]);
-        const userData = rows[0];
-
-        response.status(200).json({ success: true, token, user: userData, message: "Registration successful" });
+        response.status(200).json({ success: true, token, message: "Registration successful" });
 
     } catch (error) {
         await client.query('ROLLBACK');
@@ -83,7 +73,12 @@ const auth = async (request, response) => {
     const { email, password } = request.body;
 
     try {
-        const { rows } = await pool.query('SELECT u.id, u.hashed_password, p.email FROM nd_users u INNER JOIN nd_persons p ON u.person_id = p.id WHERE p.email = $1', [email]);
+        const { rows } = await pool.query(`
+            SELECT u.id, u.hashed_password, u.person_id 
+            FROM nd_users u 
+            WHERE u.email = $1`, 
+            [email]
+        );
         
         if (rows.length === 0) {
             throw new Error('Пользователь с таким email не найден.');
@@ -106,7 +101,68 @@ const auth = async (request, response) => {
     }
 }
 
+const createRequest = async (request, response) => {
+    const { token, phone, description } = request.body;
+    
+    try {
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        await pool.query(`
+            INSERT INTO nd_requests (description, phone, status_id, creator_id) 
+            VALUES ($1, $2, 1, $3)`,
+            [description, phone, userId]
+        );
+
+        response.status(201).json({ success: true, message: "Заявка успешно создана" });
+    } catch (error) {
+        console.error(error);
+        response.status(500).json({ success: false, message: "Ошибка при создании заявки" });
+    }
+};
+
+const getRequestsByCreator = async (request, response) => {
+    const { token } = request.body;
+
+    try {
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const { rows } = await pool.query(`
+            SELECT * FROM nd_requests WHERE creator_id = $1`,
+            [userId]
+        );
+
+        response.status(200).json({ success: true, requests: rows });
+    } catch (error) {
+        console.error(error);
+        response.status(500).json({ success: false, message: "Ошибка при получении списка заявок" });
+    }
+};
+
+const getRequestsByStatus = async (request, response) => {
+    const { token, statusId } = request.body;
+
+    try {
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const { rows } = await pool.query(`
+            SELECT * FROM nd_requests WHERE creator_id = $1 AND status_id = $2`,
+            [userId, statusId]
+        );
+
+        response.status(200).json({ success: true, requests: rows });
+    } catch (error) {
+        console.error(error);
+        response.status(500).json({ success: false, message: "Ошибка при получении списка заявок по статусу" });
+    }
+};
+
 export default {
     register,
-    auth
+    auth,
+    createRequest,
+    getRequestsByCreator,
+    getRequestsByStatus
 }
