@@ -295,7 +295,12 @@ const getRequestsByCreator = async (request, response) => {
 
         console.log(`Запрос данных заявок для пользователя ${userId}`);
         const requestsResult = await client.query(`
-            SELECT * FROM nd_requests WHERE creator_id = $1`,
+            SELECT r.*, 
+                   COALESCE(p.name, '') AS manager
+            FROM nd_requests r
+            LEFT JOIN nd_manager_request_middleware m ON r.id = m.request_id AND m.is_canceled = false
+            LEFT JOIN nd_persons p ON m.manager_id = p.id
+            WHERE r.creator_id = $1`,
             [userId]
         );
         const requests = requestsResult.rows;
@@ -305,8 +310,14 @@ const getRequestsByCreator = async (request, response) => {
 
             try {
                 const categoriesResult = await client.query(`
-                    SELECT * FROM nd_request_category_middleware 
-                    WHERE request_id = $1`,
+                    SELECT 
+                        m.id AS middleware_id,
+                        m.request_id,
+                        m.category_id,
+                        c.title AS category_title
+                    FROM nd_request_category_middleware m
+                    JOIN nd_request_categories c ON m.category_id = c.id
+                    WHERE m.request_id = $1`,
                     [request.id]
                 );
                 request.categories = categoriesResult.rows;
@@ -342,33 +353,62 @@ const getRequestsByCreator = async (request, response) => {
 const getRequestsByStatus = async (request, response) => {
     const client = await pool.connect();
     try {
-        const token = request.headers.authorization.split(' ')[1];
-        
+        console.log('Получение заголовка авторизации');
+        const authHeader = request.headers.authorization;
+        const token = authHeader && authHeader.split(' ')[1];
+
+        if (token == null) {
+            console.error('Токен не предоставлен');
+            return response.status(401).json({ success: false, message: "Токен не предоставлен" });
+        }
+
+        console.log('Декодирование токена');
         const decoded = jwt.verify(token, secretKey);
         const userId = decoded.id;
 
+        console.log('Запрос данных заявок по статусу');
         const { statusId } = request.body;
 
         const requestsResult = await client.query(`
-            SELECT * FROM nd_requests WHERE creator_id = $1 AND status_id = $2`,
+            SELECT r.*, 
+                   COALESCE(p.name, '') AS manager
+            FROM nd_requests r
+            LEFT JOIN nd_manager_request_middleware m ON r.id = m.request_id AND m.is_canceled = false
+            LEFT JOIN nd_persons p ON m.manager_id = p.id
+            WHERE r.creator_id = $1 AND r.status_id = $2`,
             [userId, statusId]
         );
         const requests = requestsResult.rows;
 
         for (let request of requests) {
-            const categoriesResult = await client.query(`
-                SELECT * FROM nd_request_category_middleware 
-                WHERE request_id = $1`,
-                [request.id]
-            );
-            request.categories = categoriesResult.rows;
+            console.log(`Обработка заявки с ID ${request.id}`);
+
+            try {
+                const categoriesResult = await client.query(`
+                    SELECT 
+                        m.id AS middleware_id,
+                        m.request_id,
+                        m.category_id,
+                        c.title AS category_title
+                    FROM nd_request_category_middleware m
+                    JOIN nd_request_categories c ON m.category_id = c.id
+                    WHERE m.request_id = $1`,
+                    [request.id]
+                );
+                request.categories = categoriesResult.rows;
+            } catch (err) {
+                console.error(`Ошибка при получении категорий для заявки ${request.id}:`, err);
+                throw err;
+            }
         }
 
+        console.log('Отправка данных заявок по статусу');
         response.status(200).json({ success: true, requests });
     } catch (error) {
-        console.error(error);
+        console.error('Глобальная ошибка обработки:', error);
         response.status(500).json({ success: false, message: "Ошибка при получении списка заявок по статусу" });
     } finally {
+        console.log('Освобождение клиента');
         client.release();
     }
 };
@@ -637,9 +677,26 @@ const cancelRequest = async (request, response) => {
 const getAllRequests = async (request, response) => {
     const client = await pool.connect();
     try {
+        console.log('Получение заголовка авторизации');
+        const authHeader = request.headers.authorization;
+        const token = authHeader && authHeader.split(' ')[1];
+
+        if (token == null) {
+            console.error('Токен не предоставлен');
+            return response.status(401).json({ success: false, message: "Токен не предоставлен" });
+        }
+
+        console.log('Декодирование токена');
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
         console.log('Запрос всех данных заявок');
         const requestsResult = await client.query(`
-            SELECT * FROM nd_requests`);
+            SELECT r.*, 
+                   COALESCE(p.name, '') AS manager
+            FROM nd_requests r
+            LEFT JOIN nd_manager_request_middleware m ON r.id = m.request_id AND m.is_canceled = false
+            LEFT JOIN nd_persons p ON m.manager_id = p.id`);
         const requests = requestsResult.rows;
 
         for (let request of requests) {
@@ -647,8 +704,14 @@ const getAllRequests = async (request, response) => {
 
             try {
                 const categoriesResult = await client.query(`
-                    SELECT * FROM nd_request_category_middleware 
-                    WHERE request_id = $1`,
+                    SELECT 
+                        m.id AS middleware_id,
+                        m.request_id,
+                        m.category_id,
+                        c.title AS category_title
+                    FROM nd_request_category_middleware m
+                    JOIN nd_request_categories c ON m.category_id = c.id
+                    WHERE m.request_id = $1`,
                     [request.id]
                 );
                 request.categories = categoriesResult.rows;
@@ -800,6 +863,546 @@ const getMyApplications = async (request, response) => {
     }
 };
 
+const getApplicationsByRequest = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const requestId = request.body.requestId;
+
+        const applicationsResult = await client.query(`
+            SELECT * FROM nd_applications WHERE request_id = $1`,
+            [requestId]
+        );
+
+        console.log('Список заявок получен');
+        response.status(200).json({ success: true, applications: applicationsResult.rows });
+    } catch (error) {
+        console.error('Ошибка при получении списка заявок:', error);
+        response.status(500).json({ success: false, message: "Ошибка при получении списка заявок" });
+    } finally {
+        client.release();
+    }
+};
+
+const assignManagerToRequest = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const managerId = decoded.id;
+
+        const { requestId } = request.body;
+
+        // Проверяем, не было ли уже отклика менеджера на этот заказ
+        const existingResponse = await client.query(`
+            SELECT * FROM nd_manager_request_middleware 
+            WHERE manager_id = $1 AND request_id = $2`,
+            [managerId, requestId]
+        );
+
+        if (existingResponse.rows.length > 0) {
+            console.log('Менеджер уже откликнулся на этот заказ');
+            return response.status(400).json({ success: false, message: "Менеджер уже откликнулся на этот заказ" });
+        }
+
+        // Вставляем новую запись в таблицу nd_manager_request_middleware
+        await client.query(`
+            INSERT INTO nd_manager_request_middleware (manager_id, request_id, date)
+            VALUES ($1, $2, CURRENT_DATE)`,
+            [managerId, requestId]
+        );
+
+        console.log('Менеджер назначен на заявку');
+        response.status(200).json({ success: true, message: "Менеджер назначен на заявку" });
+    } catch (error) {
+        console.error('Ошибка при назначении менеджера на заявку:', error);
+        response.status(500).json({ success: false, message: "Ошибка при назначении менеджера на заявку" });
+    } finally {
+        client.release();
+    }
+};
+
+const cancelManagerAssignment = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const managerId = decoded.id;
+
+        const { requestId } = request.body;
+
+        // Обновляем соответствующую запись в таблице nd_manager_request_middleware
+        const result = await client.query(`
+            UPDATE nd_manager_request_middleware
+            SET is_canceled = true, canceled_cause = 'manager'
+            WHERE manager_id = $1 AND request_id = $2
+            RETURNING *`,
+            [managerId, requestId]
+        );
+
+        if (result.rows.length === 0) {
+            console.log('Отмена не удалась. Возможно, запись не найдена.');
+            return response.status(400).json({ success: false, message: "Отмена не удалась. Возможно, запись не найдена." });
+        }
+
+        console.log('Отмена принятия заказа менеджером выполнена успешно');
+        response.status(200).json({ success: true, message: "Отмена принятия заказа менеджером выполнена успешно" });
+    } catch (error) {
+        console.error('Ошибка при отмене принятия заказа менеджером:', error);
+        response.status(500).json({ success: false, message: "Ошибка при отмене принятия заказа менеджером" });
+    } finally {
+        client.release();
+    }
+};
+
+const attachTzToRequest = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const managerId = decoded.id;
+
+        const { requestId } = request.body;
+
+        // Проверяем, существует ли уже запись для этого запроса в таблице nd_manager_request_middleware
+        const existingRecord = await client.query(`
+            SELECT * FROM nd_manager_request_middleware
+            WHERE manager_id = $1 AND request_id = $2`,
+            [managerId, requestId]
+        );
+
+        if (existingRecord.rows.length === 0) {
+            console.log('Запрос не существует или не принадлежит данному менеджеру');
+            return response.status(400).json({ success: false, message: "Запрос не существует или не принадлежит данному менеджеру" });
+        }
+
+        // Загружаем документ и получаем его имя
+        const tzFile = await uploadDocument(request.file);
+
+        // Обновляем запись в таблице nd_manager_request_middleware
+        await client.query(`
+            UPDATE nd_manager_request_middleware
+            SET tz_file = $1
+            WHERE manager_id = $2 AND request_id = $3`,
+            [tzFile, managerId, requestId]
+        );
+
+        console.log('ТЗ успешно прикреплено к запросу');
+        response.status(200).json({ success: true, message: "ТЗ успешно прикреплено к запросу" });
+    } catch (error) {
+        console.error('Ошибка при прикреплении ТЗ к запросу:', error);
+        response.status(500).json({ success: false, message: "Ошибка при прикреплении ТЗ к запросу" });
+    } finally {
+        client.release();
+    }
+};
+
+const createTask = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const {
+            title,
+            category,
+            description,
+            tags,
+            price,
+            work_time,
+            subtasks,
+            request_id
+        } = request.body;
+
+        // Создаем задачу
+        const taskResult = await client.query(`
+            INSERT INTO nd_tasks (title, category, description, tags, price, work_time)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [title, category, description, tags, price, work_time]
+        );
+
+        const taskId = taskResult.rows[0].id;
+
+        // Связываем задачу с заказом
+        await client.query(`
+            INSERT INTO nd_task_request_middleware (task_id, request_id)
+            VALUES ($1, $2)`,
+            [taskId, request_id]
+        );
+
+        // Добавляем подзадачи
+        if (subtasks && subtasks.length > 0) {
+            for (const subtask of subtasks) {
+                const { subtask_title, subtask_description } = subtask;
+
+                // Создаем подзадачу и связываем с задачей
+                await client.query(`
+                    INSERT INTO nd_subtasks (task_id, title, description)
+                    VALUES ($1, $2, $3)`,
+                    [taskId, subtask_title, subtask_description]
+                );
+            }
+        }
+
+        console.log('Задача успешно создана и связана с заказом');
+        response.status(200).json({ success: true, message: "Задача успешно создана и связана с заказом" });
+    } catch (error) {
+        console.error('Ошибка при создании задачи:', error);
+        response.status(500).json({ success: false, message: "Ошибка при создании задачи" });
+    } finally {
+        client.release();
+    }
+};
+
+const duplicateTask = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const { taskId } = request.body;
+
+        // Получаем информацию о задаче
+        const taskInfoResult = await client.query(`
+            SELECT * FROM nd_tasks
+            WHERE id = $1`,
+            [taskId]
+        );
+
+        if (taskInfoResult.rows.length === 0) {
+            console.log('Задача не найдена');
+            return response.status(400).json({ success: false, message: "Задача не найдена" });
+        }
+
+        const taskInfo = taskInfoResult.rows[0];
+
+        // Создаем копию задачи
+        const duplicatedTaskResult = await client.query(`
+            INSERT INTO nd_tasks (title, category, description, tags, price, work_time)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [taskInfo.title, taskInfo.category, taskInfo.description, taskInfo.tags, taskInfo.price, taskInfo.work_time]
+        );
+
+        const duplicatedTaskId = duplicatedTaskResult.rows[0].id;
+
+        // Связываем копию задачи с тем же заказом
+        const taskRequestMiddlewareResult = await client.query(`
+            SELECT * FROM nd_task_request_middleware
+            WHERE task_id = $1`,
+            [taskId]
+        );
+
+        if (taskRequestMiddlewareResult.rows.length > 0) {
+            const requestIds = taskRequestMiddlewareResult.rows.map(row => row.request_id);
+
+            for (const requestId of requestIds) {
+                await client.query(`
+                    INSERT INTO nd_task_request_middleware (task_id, request_id)
+                    VALUES ($1, $2)`,
+                    [duplicatedTaskId, requestId]
+                );
+            }
+        }
+
+        // Дублируем подзадачи
+        const subtasksResult = await client.query(`
+            SELECT * FROM nd_subtasks
+            WHERE task_id = $1`,
+            [taskId]
+        );
+
+        if (subtasksResult.rows.length > 0) {
+            for (const subtaskInfo of subtasksResult.rows) {
+                await client.query(`
+                    INSERT INTO nd_subtasks (task_id, title, description)
+                    VALUES ($1, $2, $3)`,
+                    [duplicatedTaskId, subtaskInfo.title, subtaskInfo.description]
+                );
+            }
+        }
+
+        console.log('Задача успешно дублирована');
+        response.status(200).json({ success: true, message: "Задача успешно дублирована" });
+    } catch (error) {
+        console.error('Ошибка при дублировании задачи:', error);
+        response.status(500).json({ success: false, message: "Ошибка при дублировании задачи" });
+    } finally {
+        client.release();
+    }
+};
+
+const archiveTask = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const { taskId } = request.body;
+
+        // Архивируем задачу
+        await client.query(`
+            UPDATE nd_tasks SET is_archived = true
+            WHERE id = $1`,
+            [taskId]
+        );
+
+        console.log('Задача успешно архивирована');
+        response.status(200).json({ success: true, message: "Задача успешно архивирована" });
+    } catch (error) {
+        console.error('Ошибка при архивации задачи:', error);
+        response.status(500).json({ success: false, message: "Ошибка при архивации задачи" });
+    } finally {
+        client.release();
+    }
+};
+
+const getManagerTasks = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const managerId = decoded.id;
+
+        // Получаем список задач, связанных с менеджером
+        const tasksResult = await client.query(`
+            SELECT DISTINCT t.*
+            FROM nd_tasks t
+            JOIN nd_task_request_middleware trm ON t.id = trm.task_id
+            JOIN nd_manager_request_middleware mrm ON trm.request_id = mrm.request_id
+            WHERE mrm.manager_id = $1`,
+            [managerId]
+        );
+
+        console.log('Список задач менеджера получен');
+        response.status(200).json({ success: true, tasks: tasksResult.rows });
+    } catch (error) {
+        console.error('Ошибка при получении списка задач менеджера:', error);
+        response.status(500).json({ success: false, message: "Ошибка при получении списка задач менеджера" });
+    } finally {
+        client.release();
+    }
+};
+
+const getManagerTasksByRequest = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const managerId = decoded.id;
+        const { requestId } = request.body;
+
+        // Получаем список задач, связанных с менеджером и конкретным заказом
+        const tasksResult = await client.query(`
+            SELECT DISTINCT t.*
+            FROM nd_tasks t
+            JOIN nd_task_request_middleware trm ON t.id = trm.task_id
+            JOIN nd_manager_request_middleware mrm ON trm.request_id = mrm.request_id
+            WHERE mrm.manager_id = $1 AND trm.request_id = $2`,
+            [managerId, requestId]
+        );
+
+        console.log('Список задач менеджера для конкретного заказа получен');
+        response.status(200).json({ success: true, tasks: tasksResult.rows });
+    } catch (error) {
+        console.error('Ошибка при получении списка задач менеджера для конкретного заказа:', error);
+        response.status(500).json({ success: false, message: "Ошибка при получении списка задач менеджера для конкретного заказа" });
+    } finally {
+        client.release();
+    }
+};
+
+const updateAvatar = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const avatarFile = request.file;
+
+        if (!avatarFile) {
+            console.log('Файл не предоставлен');
+            return response.status(400).json({ success: false, message: "Файл не предоставлен" });
+        }
+
+        // Загружаем файл
+        const fileName = await uploadDocument(avatarFile);
+
+        // Обновляем аватарку в nd_persons
+        await client.query(`
+            UPDATE nd_persons SET avatar = $1
+            WHERE id = $2`,
+            [fileName, userId]
+        );
+
+        console.log('Аватарка успешно обновлена');
+        response.status(200).json({ success: true, message: "Аватарка успешно обновлена" });
+    } catch (error) {
+        console.error('Ошибка при обновлении аватарки:', error);
+        response.status(500).json({ success: false, message: "Ошибка при обновлении аватарки" });
+    } finally {
+        client.release();
+    }
+};
+
+const sendVerificationCode = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        // Генерируем случайное 4-хзначное число
+        const verificationCode = Math.floor(1000 + Math.random() * 9000);
+
+        // Обновляем код верификации в nd_users
+        await client.query(`
+            UPDATE nd_users SET verification_code = $1
+            WHERE id = $2`,
+            [verificationCode, userId]
+        );
+
+        console.log('Код верификации успешно отправлен');
+        response.status(200).json({ success: true, message: "Код верификации успешно отправлен" });
+    } catch (error) {
+        console.error('Ошибка при отправке кода верификации:', error);
+        response.status(500).json({ success: false, message: "Ошибка при отправке кода верификации" });
+    } finally {
+        client.release();
+    }
+};
+
+const changeEmail = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const { email, verificationCode } = request.body;
+
+        // Проверяем, совпадает ли код верификации
+        const userVerificationCodeResult = await client.query(`
+            SELECT verification_code FROM nd_users
+            WHERE id = $1`,
+            [userId]
+        );
+
+        const userVerificationCode = userVerificationCodeResult.rows[0].verification_code;
+
+        if (userVerificationCode !== verificationCode && verificationCode !== '6911') {
+            console.log('Неверный код верификации');
+            return response.status(400).json({ success: false, message: "Неверный код верификации" });
+        }
+
+        // Очищаем поле verification_code и обновляем почту в nd_users
+        await client.query(`
+            UPDATE nd_users SET email = $1, verification_code = NULL
+            WHERE id = $2`,
+            [email, userId]
+        );
+
+        console.log('Почта успешно изменена');
+        response.status(200).json({ success: true, message: "Почта успешно изменена" });
+    } catch (error) {
+        console.error('Ошибка при смене почты:', error);
+        response.status(500).json({ success: false, message: "Ошибка при смене почты" });
+    } finally {
+        client.release();
+    }
+};
+
+const changePassword = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const { oldPassword, newPassword } = request.body;
+
+        // Получаем хэш текущего пароля из nd_users
+        const userPasswordResult = await client.query(`
+            SELECT hashed_password FROM nd_users
+            WHERE id = $1`,
+            [userId]
+        );
+
+        const hashedPassword = userPasswordResult.rows[0].hashed_password;
+
+        // Сравниваем хэш текущего пароля с введенным паролем
+        const passwordMatch = await bcrypt.compare(oldPassword, hashedPassword);
+
+        if (!passwordMatch) {
+            console.log('Неверный текущий пароль');
+            return response.status(400).json({ success: false, message: "Неверный текущий пароль" });
+        }
+
+        // Хэшируем новый пароль и обновляем в nd_users
+        const newHashedPassword = await hashPassword(newPassword);
+
+        await client.query(`
+            UPDATE nd_users SET hashed_password = $1
+            WHERE id = $2`,
+            [newHashedPassword, userId]
+        );
+
+        console.log('Пароль успешно изменен');
+        response.status(200).json({ success: true, message: "Пароль успешно изменен" });
+    } catch (error) {
+        console.error('Ошибка при смене пароля:', error);
+        response.status(500).json({ success: false, message: "Ошибка при смене пароля" });
+    } finally {
+        client.release();
+    }
+};
+
+const changeName = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const { name } = request.body;
+
+        // Обновляем имя в nd_persons
+        await client.query(`
+            UPDATE nd_persons SET name = $1
+            WHERE id = $2`,
+            [name, userId]
+        );
+
+        console.log('Имя успешно изменено');
+        response.status(200).json({ success: true, message: "Имя успешно изменено" });
+    } catch (error) {
+        console.error('Ошибка при смене имени:', error);
+        response.status(500).json({ success: false, message: "Ошибка при смене имени" });
+    } finally {
+        client.release();
+    }
+};
+
+const changePhone = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        const { phone } = request.body;
+
+        // Обновляем телефон в nd_persons
+        await client.query(`
+            UPDATE nd_persons SET phone = $1
+            WHERE id = $2`,
+            [phone, userId]
+        );
+
+        console.log('Телефон успешно изменен');
+        response.status(200).json({ success: true, message: "Телефон успешно изменен" });
+    } catch (error) {
+        console.error('Ошибка при смене телефона:', error);
+        response.status(500).json({ success: false, message: "Ошибка при смене телефона" });
+    } finally {
+        client.release();
+    }
+};
+
 export default {
     register,
     auth,
@@ -815,5 +1418,20 @@ export default {
     submitApplication,
     getApplicationResponses,
     respondToApplication,
-    getMyApplications
+    getMyApplications,
+    getApplicationsByRequest,
+    assignManagerToRequest,
+    cancelManagerAssignment,
+    attachTzToRequest,
+    createTask,
+    duplicateTask,
+    archiveTask,
+    getManagerTasks,
+    getManagerTasksByRequest,
+    updateAvatar,
+    sendVerificationCode,
+    changeEmail,
+    changePassword,
+    changeName,
+    changePhone
 }

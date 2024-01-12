@@ -45,6 +45,21 @@ app.post('/submitApplication', db.submitApplication);
 app.post('/getApplicationResponses', db.getApplicationResponses);
 app.post('/respondToApplication', db.respondToApplication);
 app.post('/getMyApplications', db.getMyApplications);
+app.post('/getApplicationsByRequest', db.getApplicationsByRequest);
+app.post('/assignManagerToRequest', db.assignManagerToRequest);
+app.post('/cancelManagerAssignment', db.cancelManagerAssignment);
+app.post('/attachTzToRequest', upload.single('documentFile'), db.attachTzToRequest);
+app.post('/createTask', db.createTask);
+app.post('/duplicateTask', db.duplicateTask);
+app.post('/archiveTask', db.archiveTask);
+app.post('/getManagerTasks', db.getManagerTasks);
+app.post('/getManagerTasksByRequest', db.getManagerTasksByRequest);
+app.post('/updateAvatar', db.updateAvatar);
+app.post('/sendVerificationCode', db.sendVerificationCode);
+app.post('/changeEmail', db.changeEmail);
+app.post('/changePassword', db.changePassword);
+app.post('/changeName', db.changeName);
+app.post('/changePhone', db.changePhone);
 
 let port = process.env.PORT || 3034;
 
