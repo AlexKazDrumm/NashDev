@@ -1,7 +1,7 @@
 import pg from 'pg';
 import moment from 'moment'
 moment.locale('ru');
-import { productionPoolOptions, secretKey } from './accesses.js';
+import { productionPoolOptions, secretKey, transporter } from './accesses.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import fs from 'fs';
@@ -11,6 +11,25 @@ const Pool = pg.Pool
 const pool = new Pool(productionPoolOptions);
 
 const SALT_ROUNDS = 10;
+
+const sendEmail = async (emailsTo, title, message) => {
+    for (let i = 0; i < emailsTo.length; i++) {
+        let mailOptions = {
+            from: 'nashdeveloper.kz@mail.ru',
+            to: emailsTo[i],
+            subject: title,
+            text: message,
+        };
+
+        await transporter.sendMail(mailOptions, function (error, info) {
+            if (error) {
+                console.log(error);
+            } else {
+                console.log('Email sent to: ' + emailsTo[i]);
+            }
+        });
+    }
+};
 
 const isEmailExists = async (email) => {
     const { rows } = await pool.query('SELECT email FROM nd_users WHERE email = $1', [email]);
@@ -1248,6 +1267,18 @@ const sendVerificationCode = async (request, response) => {
 
         // Генерируем случайное 4-хзначное число
         const verificationCode = Math.floor(1000 + Math.random() * 9000);
+
+        // Получаем текущий адрес электронной почты пользователя
+        const userResult = await client.query(`
+            SELECT email FROM nd_users
+            WHERE id = $1`,
+            [userId]
+        );
+
+        const userEmail = userResult.rows[0].email;
+
+        // Отправляем код верификации на старую почту
+        await sendEmail([userEmail], 'Код верификации', `Ваш код верификации: ${verificationCode}`);
 
         // Обновляем код верификации в nd_users
         await client.query(`
