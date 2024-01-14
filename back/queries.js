@@ -1171,26 +1171,26 @@ const archiveTask = async (request, response) => {
 
 const getManagerTasks = async (request, response) => {
     const client = await pool.connect();
+
     try {
         const token = request.headers.authorization.split(' ')[1];
         const decoded = jwt.verify(token, secretKey);
         const managerId = decoded.id;
 
-        // Получаем список задач, связанных с менеджером
         const tasksResult = await client.query(`
-            SELECT DISTINCT t.*
+            SELECT t.*, jsonb_agg(jsonb_build_object('title', st.title, 'description', st.description)) as subtasks
             FROM nd_tasks t
             JOIN nd_task_request_middleware trm ON t.id = trm.task_id
             JOIN nd_manager_request_middleware mrm ON trm.request_id = mrm.request_id
-            WHERE mrm.manager_id = $1`,
-            [managerId]
-        );
+            LEFT JOIN nd_subtasks st ON t.id = st.task_id
+            WHERE mrm.manager_id = $1
+            GROUP BY t.id
+        `, [managerId]);
 
-        console.log('Список задач менеджера получен');
         response.status(200).json({ success: true, tasks: tasksResult.rows });
     } catch (error) {
-        console.error('Ошибка при получении списка задач менеджера:', error);
-        response.status(500).json({ success: false, message: "Ошибка при получении списка задач менеджера" });
+        console.error('Error occurred:', error);
+        response.status(500).json({ success: false, message: error.message });
     } finally {
         client.release();
     }
@@ -1204,15 +1204,15 @@ const getManagerTasksByRequest = async (request, response) => {
         const managerId = decoded.id;
         const { requestId } = request.body;
 
-        // Получаем список задач, связанных с менеджером и конкретным заказом
         const tasksResult = await client.query(`
-            SELECT DISTINCT t.*
+            SELECT t.*, jsonb_agg(jsonb_build_object('title', st.title, 'description', st.description)) as subtasks
             FROM nd_tasks t
             JOIN nd_task_request_middleware trm ON t.id = trm.task_id
             JOIN nd_manager_request_middleware mrm ON trm.request_id = mrm.request_id
-            WHERE mrm.manager_id = $1 AND trm.request_id = $2`,
-            [managerId, requestId]
-        );
+            LEFT JOIN nd_subtasks st ON t.id = st.task_id
+            WHERE mrm.manager_id = $1 AND trm.request_id = $2
+            GROUP BY t.id
+        `, [managerId, requestId]);
 
         console.log('Список задач менеджера для конкретного заказа получен');
         response.status(200).json({ success: true, tasks: tasksResult.rows });
