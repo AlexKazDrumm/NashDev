@@ -1555,7 +1555,7 @@ const getUserInfo = async (request, response) => {
 
         // Получение полных данных о пользователе
         const userInfo = await client.query(`
-            SELECT p.id AS person_id, p.name, p.role_id, p.phone, u.id AS user_id, u.email 
+            SELECT p.id AS person_id, p.name, p.role_id, p.phone, p.avatar, u.id AS user_id, u.email 
             FROM nd_persons p 
             JOIN nd_users u ON p.id = u.person_id 
             WHERE u.id = $1`,
