@@ -1434,6 +1434,118 @@ const changePhone = async (request, response) => {
     }
 };
 
+const createUserRequisites = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const {
+            before_date,
+            card_number,
+            cvv
+        } = request.body;
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const personId = decoded.id;
+
+        // Хэшируем CVV
+        const hashedCvv = await hashPassword(cvv);
+
+        // Создаем запись в nd_person_requisites
+        await client.query(`
+            INSERT INTO nd_person_requisites (person_id, before_date, card_number, hashed_cvv)
+            VALUES ($1, $2, $3, $4)`,
+            [personId, before_date, card_number, hashedCvv]
+        );
+
+        console.log('Реквизиты пользователя успешно созданы');
+        response.status(200).json({ success: true, message: "Реквизиты пользователя успешно созданы" });
+    } catch (error) {
+        console.error('Ошибка при создании реквизитов пользователя:', error);
+        response.status(500).json({ success: false, message: "Ошибка при создании реквизитов пользователя" });
+    } finally {
+        client.release();
+    }
+};
+
+const getCardDataByToken = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const personId = decoded.id;
+
+        // Получаем данные всех карт пользователя (не выводим hashed_cvv)
+        const result = await client.query(`
+            SELECT id, before_date, card_number
+            FROM nd_person_requisites
+            WHERE person_id = $1`,
+            [personId]
+        );
+
+        const cardData = result.rows;
+        console.log('Данные карт пользователя успешно получены');
+        response.status(200).json({ success: true, cardData });
+    } catch (error) {
+        console.error('Ошибка при получении данных карт пользователя:', error);
+        response.status(500).json({ success: false, message: "Ошибка при получении данных карт пользователя" });
+    } finally {
+        client.release();
+    }
+};
+
+const verifyCvv = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const {
+            card_id,
+            entered_cvv
+        } = request.body;
+
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const personId = decoded.id;
+
+        // Проверяем, является ли текущий пользователь владельцем карты
+        const isOwner = await client.query(`
+            SELECT COUNT(*)
+            FROM nd_person_requisites
+            WHERE id = $1 AND person_id = $2`,
+            [card_id, personId]
+        );
+
+        if (isOwner.rows[0].count === 0) {
+            console.log('Пользователь не является владельцем карты');
+            response.status(403).json({ success: false, message: "Пользователь не является владельцем карты" });
+            return;
+        }
+
+        // Получаем хэшированный CVV из базы данных
+        const result = await client.query(`
+            SELECT hashed_cvv
+            FROM nd_person_requisites
+            WHERE id = $1`,
+            [card_id]
+        );
+
+        const hashedCvv = result.rows[0].hashed_cvv;
+
+        // Сравниваем введенный CVV с хэшированным значением
+        const isCvvValid = await bcrypt.compare(entered_cvv, hashedCvv);
+
+        if (isCvvValid) {
+            console.log('Введенный CVV верен');
+            response.status(200).json({ success: true, message: "Введенный CVV верен" });
+        } else {
+            console.log('Введенный CVV неверен');
+            response.status(200).json({ success: false, message: "Введенный CVV неверен" });
+        }
+    } catch (error) {
+        console.error('Ошибка при проверке CVV:', error);
+        response.status(500).json({ success: false, message: "Ошибка при проверке CVV" });
+    } finally {
+        client.release();
+    }
+};
+
 export default {
     register,
     auth,
@@ -1464,5 +1576,8 @@ export default {
     changeEmail,
     changePassword,
     changeName,
-    changePhone
+    changePhone,
+    createUserRequisites,
+    getCardDataByToken,
+    verifyCvv
 }

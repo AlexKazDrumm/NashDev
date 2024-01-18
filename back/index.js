@@ -60,6 +60,9 @@ app.post('/changeEmail', db.changeEmail);
 app.post('/changePassword', db.changePassword);
 app.post('/changeName', db.changeName);
 app.post('/changePhone', db.changePhone);
+app.post('/createUserRequisites', db.createUserRequisites);
+app.post('/getCardDataByToken', db.getCardDataByToken);
+app.post('/verifyCvv', db.verifyCvv);
 
 let port = process.env.PORT || 3034;
 
