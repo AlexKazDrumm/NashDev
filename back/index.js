@@ -63,6 +63,7 @@ app.post('/changePhone', db.changePhone);
 app.post('/createUserRequisites', db.createUserRequisites);
 app.post('/getCardDataByToken', db.getCardDataByToken);
 app.post('/verifyCvv', db.verifyCvv);
+app.post('/getUserInfo', db.getUserInfo);
 
 let port = process.env.PORT || 3034;
 

@@ -1546,6 +1546,48 @@ const verifyCvv = async (request, response) => {
     }
 };
 
+const getUserInfo = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const token = request.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, secretKey);
+        const userId = decoded.id;
+
+        // Получение полных данных о пользователе
+        const userInfo = await client.query(`
+            SELECT p.id AS person_id, p.name, p.role_id, p.phone, u.id AS user_id, u.email 
+            FROM nd_persons p 
+            JOIN nd_users u ON p.id = u.person_id 
+            WHERE u.id = $1`,
+            [userId]
+        );
+
+        const userDetails = userInfo.rows[0];
+
+        // Получение подсказок пользователя
+        const tipsResult = await client.query(`
+            SELECT * FROM nd_tips 
+            WHERE user_id = $1`, 
+            [userId]
+        );
+
+        const tips = tipsResult.rows;
+
+        response.status(200).json({
+            success: true,
+            user: {
+                ...userDetails,
+                tips: tips // Собираем все подсказки пользователя
+            }
+        });
+    } catch (error) {
+        console.error('Ошибка при получении данных о пользователе:', error);
+        response.status(500).json({ success: false, message: "Ошибка при получении данных о пользователе" });
+    } finally {
+        client.release();
+    }
+};
+
 export default {
     register,
     auth,
@@ -1579,5 +1621,6 @@ export default {
     changePhone,
     createUserRequisites,
     getCardDataByToken,
-    verifyCvv
+    verifyCvv,
+    getUserInfo
 }
