@@ -4,8 +4,14 @@ import db from './queries.js'
 import cors from 'cors'
 import bodyParser from 'body-parser';
 import multer from 'multer';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 app.use(cors())
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 app.use(bodyParser.json())
 app.use(
@@ -34,6 +40,7 @@ app.post('/register', db.register);
 app.post('/auth', db.auth);
 app.post('/createRequest', upload.array('files'), db.createRequest);
 app.post('/getRequestsByCreator', db.getRequestsByCreator);
+app.post('/getFilteredRequests', db.getFilteredRequests);
 app.post('/getRequestsByStatus', db.getRequestsByStatus);
 app.post('/getAllRequestCategories', db.getAllRequestCategories);
 app.post('/hideUserTip', db.hideUserTip);
@@ -64,6 +71,20 @@ app.post('/createUserRequisites', db.createUserRequisites);
 app.post('/getCardDataByToken', db.getCardDataByToken);
 app.post('/verifyCvv', db.verifyCvv);
 app.post('/getUserInfo', db.getUserInfo);
+
+app.get('/file/:filename', (request, response) => {
+    const filename = request.params.filename;
+    const filePath = path.join(__dirname, 'uploads', filename);
+
+    // Проверка на существование файла
+    if (fs.existsSync(filePath)) {
+        // Отправка файла для просмотра в браузере
+        response.sendFile(filePath);
+    } else {
+        // Если файл не найден, отправить сообщение об ошибке
+        response.status(404).send('File not found');
+    }
+});
 
 let port = process.env.PORT || 3034;
 

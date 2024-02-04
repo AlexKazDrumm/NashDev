@@ -315,10 +315,16 @@ const getRequestsByCreator = async (request, response) => {
         console.log(`Запрос данных заявок для пользователя ${userId}`);
         const requestsResult = await client.query(`
             SELECT r.*, 
-                   COALESCE(p.name, '') AS manager
+                   COALESCE(p.name, '') AS manager,
+                   CASE 
+                       WHEN creator.avatar IS NOT NULL THEN CONCAT('https://api.nashdeveloper.kz/file/', creator.avatar)
+                       ELSE NULL 
+                   END AS creator_avatar,
+                   creator.name AS creator_name
             FROM nd_requests r
             LEFT JOIN nd_manager_request_middleware m ON r.id = m.request_id AND m.is_canceled = false
             LEFT JOIN nd_persons p ON m.manager_id = p.id
+            LEFT JOIN nd_persons creator ON r.creator_id = creator.id
             WHERE r.creator_id = $1`,
             [userId]
         );
@@ -351,7 +357,10 @@ const getRequestsByCreator = async (request, response) => {
                     WHERE request_id = $1`,
                     [request.id]
                 );
-                request.files = filesResult.rows;
+                request.files = filesResult.rows.map(file => ({
+                    ...file,
+                    useless_link: `https://api.nashdeveloper.kz/file/${file.file}`
+                }));
             } catch (err) {
                 console.error(`Ошибка при получении файлов для заявки ${request.id}:`, err);
                 throw err;
@@ -363,6 +372,77 @@ const getRequestsByCreator = async (request, response) => {
     } catch (error) {
         console.error('Глобальная ошибка обработки:', error);
         response.status(500).json({ success: false, message: "Ошибка при получении списка заявок" });
+    } finally {
+        console.log('Освобождение клиента');
+        client.release();
+    }
+};
+
+const getFilteredRequests = async (request, response) => {
+    const client = await pool.connect();
+    try {
+        const { request_categories, mid_price } = request.body;
+
+        const requestsResult = await client.query(`
+            SELECT DISTINCT r.*, 
+                            COALESCE(manager.name, '') AS manager,
+                            CASE 
+                                WHEN creator.avatar IS NOT NULL THEN CONCAT('https://api.nashdeveloper.kz/file/', creator.avatar)
+                                ELSE NULL 
+                            END AS customer_avatar,
+                            creator.name AS customer_name
+            FROM nd_requests r
+            JOIN nd_request_category_middleware m ON r.id = m.request_id
+            LEFT JOIN nd_persons manager ON manager.id = (SELECT manager_id FROM nd_manager_request_middleware WHERE request_id = r.id AND is_canceled = false LIMIT 1)
+            LEFT JOIN nd_persons creator ON r.creator_id = creator.id
+            WHERE m.category_id = ANY($1) 
+              AND (r.price <= $2 OR r.price IS NULL)
+        `, [request_categories, mid_price]);
+
+        const requests = requestsResult.rows;
+
+        for (let request of requests) {
+            console.log(`Обработка заявки с ID ${request.id}`);
+
+            try {
+                const categoriesResult = await client.query(`
+                    SELECT 
+                        m.id AS middleware_id,
+                        m.request_id,
+                        m.category_id,
+                        c.title AS category_title
+                    FROM nd_request_category_middleware m
+                    JOIN nd_request_categories c ON m.category_id = c.id
+                    WHERE m.request_id = $1`,
+                    [request.id]
+                );
+                request.categories = categoriesResult.rows;
+            } catch (err) {
+                console.error(`Ошибка при получении категорий для заявки ${request.id}:`, err);
+                throw err;
+            }
+
+            try {
+                const filesResult = await client.query(`
+                    SELECT * FROM nd_request_files 
+                    WHERE request_id = $1`,
+                    [request.id]
+                );
+                request.files = filesResult.rows.map(file => ({
+                    ...file,
+                    useless_link: `https://api.nashdeveloper.kz/file/${file.file}`
+                }));
+            } catch (err) {
+                console.error(`Ошибка при получении файлов для заявки ${request.id}:`, err);
+                throw err;
+            }
+        }
+
+        console.log('Отправка отфильтрованных данных заявок');
+        response.status(200).json({ success: true, requests });
+    } catch (error) {
+        console.error('Ошибка при обработке запроса:', error);
+        response.status(500).json({ success: false, message: "Ошибка при получении фильтрованных заявок" });
     } finally {
         console.log('Освобождение клиента');
         client.release();
@@ -712,10 +792,16 @@ const getAllRequests = async (request, response) => {
         console.log('Запрос всех данных заявок');
         const requestsResult = await client.query(`
             SELECT r.*, 
-                   COALESCE(p.name, '') AS manager
+                   COALESCE(p.name, '') AS manager,
+                   creator.name AS creator_name,
+                   CASE 
+                       WHEN creator.avatar IS NOT NULL THEN CONCAT('https://api.nashdeveloper.kz/file/', creator.avatar)
+                       ELSE NULL 
+                   END AS creator_avatar
             FROM nd_requests r
             LEFT JOIN nd_manager_request_middleware m ON r.id = m.request_id AND m.is_canceled = false
-            LEFT JOIN nd_persons p ON m.manager_id = p.id`);
+            LEFT JOIN nd_persons p ON m.manager_id = p.id
+            LEFT JOIN nd_persons creator ON r.creator_id = creator.id`);
         const requests = requestsResult.rows;
 
         for (let request of requests) {
@@ -745,7 +831,10 @@ const getAllRequests = async (request, response) => {
                     WHERE request_id = $1`,
                     [request.id]
                 );
-                request.files = filesResult.rows;
+                request.files = filesResult.rows.map(file => ({
+                    ...file,
+                    useless_link: `https://api.nashdeveloper.kz/file/${file.file}`
+                }));
             } catch (err) {
                 console.error(`Ошибка при получении файлов для заявки ${request.id}:`, err);
                 throw err;
@@ -1593,6 +1682,7 @@ export default {
     auth,
     createRequest,
     getRequestsByCreator,
+    getFilteredRequests,
     getRequestsByStatus,
     getAllRequestCategories,
     hideUserTip,
