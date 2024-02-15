@@ -40,6 +40,7 @@ app.post('/register', db.register);
 app.post('/auth', db.auth);
 app.post('/createRequest', upload.array('files'), db.createRequest);
 app.post('/getRequestsByCreator', db.getRequestsByCreator);
+app.post('/getRequestsByManager', db.getRequestsByManager);
 app.post('/getFilteredRequests', db.getFilteredRequests);
 app.post('/getRequestsByStatus', db.getRequestsByStatus);
 app.post('/getAllRequestCategories', db.getAllRequestCategories);
